@@ -1,0 +1,128 @@
+<!-- G1: Aussehen kommt aus static/see_also.css (in jeder Seite im <head> eingebunden). -->
+
+<div class="topbar">
+    <a href="{{ url_for('index') }}" class="brand">see also</a>
+    <button class="header-link" id="header-go-btn" onclick="triggerSearch()" title="Search (Cmd/Ctrl+Enter in the text field)">search</button>
+    <button class="header-link" id="header-clear-btn" onclick="triggerClear()" title="Clear the text field and the results">clear</button>
+    <!-- Reine Anzeige, bewusst nicht mehr klickbar: Ein Klick loeste bisher
+         direkt eine Nachindizierung aus, die bei neu hinzugefuegten
+         Alt-PDFs (ohne Textebene) ins Leere lief, da dort zunaechst ein
+         Remastering noetig ist (siehe See-Also-III). Der Nutzer soll
+         stattdessen bewusst zur Statusseite gehen, wo die eigentlich
+         noetigen Schritte (fehlende Dateien, Remastering, Nachindizierung)
+         sichtbar und in der richtigen Reihenfolge angeboten werden. -->
+    <a href="{{ url_for('status_page') }}" class="header-link">status</a>
+    <span class="header-index-badge" id="header-index-badge" title="Files added, changed (+) or removed (−) since the last indexing run. Update the index on the status page.">changes <span id="header-index-count" class="num">{{ neu_count }}</span></span>
+</div>
+
+<script>
+    (function () {
+        const badge = document.getElementById('header-index-badge');
+        const countEl = document.getElementById('header-index-count');
+        let pollHandle = null;
+        let wasRunning = false;
+
+        function updateAttention(count) {
+            // Ungleich 0, nicht nur "> 0": Ein negativer Wert (entfernte
+            // Dateien seit letzter Indizierung) braucht ebenso Aufmerksamkeit
+            // wie ein positiver (neue/geaenderte Dateien) - in beiden
+            // Faellen ist eine Nachindizierung faellig.
+            badge.classList.toggle('attention', count !== 0);
+        }
+        updateAttention(parseInt(countEl.textContent, 10) || 0);
+
+        function refreshBadge() {
+            fetch('/index/badge').then(r => r.json()).then(data => {
+                countEl.textContent = data.neu;
+                updateAttention(data.neu);
+            });
+        }
+
+        // Bleibt bewusst bestehen, obwohl die Badge selbst nicht mehr
+        // klickbar ist: Ein Lauf kann weiterhin von der Statusseite aus
+        // gestartet werden, waehrend index.html geoeffnet ist - die
+        // Anzeige soll das live nachvollziehen, nicht nur beim naechsten
+        // Neuladen.
+        function poll() {
+            fetch('/index/status').then(r => r.json()).then(data => {
+                if (data.is_running) {
+                    wasRunning = true;
+                    if (data.mode === 'incremental') {
+                        const remaining = Math.max(data.total - data.current, 0);
+                        countEl.textContent = remaining;
+                        updateAttention(remaining);
+                    }
+                } else {
+                    if (wasRunning) { wasRunning = false; refreshBadge(); }
+                    stopPoll();
+                }
+            });
+        }
+
+        function startPoll() {
+            if (!pollHandle) pollHandle = setInterval(poll, 1000);
+        }
+        function stopPoll() {
+            if (pollHandle) { clearInterval(pollHandle); pollHandle = null; }
+        }
+
+        // Einmaliger Check beim Laden: laeuft bereits ein von der
+        // Statusseite gestarteter Lauf, sofort in den schnellen Takt
+        // wechseln statt erst auf den naechsten Hintergrund-Refresh zu
+        // warten.
+        fetch('/index/status').then(r => r.json()).then(data => {
+            if (data.is_running) { wasRunning = true; startPoll(); }
+        });
+
+        // Leichter Hintergrund-Takt als Fallback, wenn gerade kein Lauf
+        // aktiv ist - haelt die Anzeige trotzdem halbwegs aktuell.
+        setInterval(() => { if (!pollHandle) refreshBadge(); }, 15000);
+
+        // "clear" - leert das Phrasen-Eingabefeld UND (falls vorhanden,
+        // d.h. auf der Startseite) Ergebnisse, Chunks und PDF-Anzeige, da
+        // mit leerer Phrase all das veraltete Information waere.
+        // window.clearResultsView wird in index.html definiert, da die
+        // betroffenen Elemente (doc-list, chunk-list, pdf-frame) nur dort
+        // existieren - _header.html ist auch auf status.html/chunk.html
+        // eingebunden, wo es sie nicht gibt.
+        // Zaehler-Update per dispatchtem 'input'-Event statt eigener
+        // Kopie der Logik - index.html haengt updatePhraseCounter()
+        // bereits an dieses Event, inklusive near-limit/at-limit-Klassen.
+        window.triggerClear = function () {
+            const input = document.getElementById('phrase-input');
+            if (!input) {
+                alert('Only available on the search page.');
+                return;
+            }
+            input.value = '';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.focus();
+
+            if (typeof window.clearResultsView === 'function') {
+                window.clearResultsView();
+            }
+        };
+
+        // "go!" - ruft die echte Suche auf, falls auf der Startseite
+        // vorhanden (dort ist window.performSearch definiert, siehe
+        // index.html). Auf anderen Seiten (status.html, chunk.html) gibt
+        // es kein Suchfeld - dort ehrlich informieren statt still nichts
+        // zu tun.
+        window.triggerSearch = function () {
+            const input = document.getElementById('phrase-input');
+            if (!input) {
+                alert('Search is only available on the search page.');
+                return;
+            }
+            const phrase = input.value.trim();
+            if (!phrase) {
+                alert('Enter some text to search for first.');
+                return;
+            }
+            if (typeof window.performSearch === 'function') {
+                window.performSearch(phrase);
+            }
+        };
+
+    })();
+</script>

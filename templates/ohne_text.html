@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>see also: OCR found no text</title>
+{% include "_dateiliste_gemeinsam.html" %}
+</head>
+<body>
+    {% include "_header.html" %}
+    {% from "_dateizeile.html" import zeile %}
+    <main>
+    <div class="page-title-row">
+        <h1>OCR found no text <span class="muted num" style="font-size:0.7em">{{ d.gesamt }}</span></h1>
+        <button class="btn small" onclick="location.reload()">Reload</button>
+        <a href="{{ url_for('problemfaelle_seite') }}">Files to review ({{ d.zu_entscheiden }})</a>
+        <a href="{{ url_for('status_page') }}">Status</a>
+    </div>
+    <p class="intro">
+        OCR ran on these files but found no text: photos, drawings, sheet music, handwriting, blank pages.
+        Usually there is nothing to do. They are tried again only when the file changes.
+    </p>
+    {% if not d.bereiche %}
+        <p class="leer">None.</p>
+    {% endif %}
+    {% for b in d.bereiche %}
+    <details class="bereich">
+        <summary>{{ b.name }} <span class="n">{{ b.zeilen|length }}</span></summary>
+        <table>
+            {% for z in b.zeilen %}{{ zeile(z) }}{% endfor %}
+        </table>
+    </details>
+    {% endfor %}
+    </main>
+</body>
+</html>

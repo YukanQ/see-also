@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>see-also - {{ pdf_base_dir_anzeige }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='see_also.css') }}">
+    <style>
+        html, body { margin: 0; padding: 0; height: 100%; }
+        .page-layout { display: flex; height: 100vh; }
+        .left-half { flex: 0 0 600px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        /* Rechte Haelfte randlos: maximale Leseflaeche fuer das PDF. */
+        .right-half { flex: 1; min-width: 0; height: 100vh; }
+        .right-half iframe { width: 100%; height: 100%; border: none; display: block; background: var(--panel); }
+
+        .phrase-input { flex: 0 0 auto; padding: 10px 12px 0; }
+        .phrase-input textarea {
+            width: 100%; display: block; resize: none; padding: 9px 11px;
+            font-family: var(--serif); font-size: 1.02em; line-height: 1.5; color: var(--warn);   /* G1b: Kupfer */
+        }
+        .phrase-input textarea::placeholder { color: var(--faint); font-family: var(--sans); font-size: 0.95em; }
+        .phrase-input textarea:focus { outline: none; border-color: var(--brass); }
+        .phrase-counter { font-size: 0.75em; color: var(--faint); text-align: right; padding: 2px 1px 0; font-variant-numeric: tabular-nums; }
+        .phrase-counter.near-limit { color: var(--warn); }
+        .phrase-counter.at-limit { color: var(--error); }
+        .brief-note { font-size: 0.82em; color: var(--muted); margin: 0 12px 4px; }
+        .brief-note .warn { color: var(--warn); }
+
+        .doc-path-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; padding: 8px 12px 6px; margin-top: 6px;
+                        border-top: 1px solid var(--rule); font-size: 0.85em; color: var(--muted); }
+        #doc-path-bar-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .titlebar-action { background: none; border: none; font: inherit; color: var(--link); cursor: pointer; padding: 0; white-space: nowrap; }
+        .titlebar-action:hover { color: var(--text); }
+
+        .panel { display: flex; flex-direction: column; min-height: 0; border-top: 1px solid var(--rule); }
+        .panel-titlebar { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+                          padding: 6px 12px 4px; font-size: 0.8em; color: var(--faint); }
+        .panel-content { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 6px; }
+        .panel-docs { flex: 3 1 0; }
+        .panel-titlebar-ruled { border-bottom: 1px solid var(--rule); padding-bottom: 6px; margin-bottom: 4px; }
+        .panel-chunks { flex: 2 1 0; }
+
+        .doc-item, .chunk-item { padding: 5px 12px 5px 10px; border-left: 2px solid transparent; cursor: pointer; word-break: break-word; }
+        .doc-item:hover, .chunk-item:hover { background: var(--panel); }
+        .doc-item.selected, .chunk-item.selected { background: var(--select); border-left-color: var(--brass); }
+        .doc-item .score, .chunk-item .score { font-variant-numeric: tabular-nums; font-size: 0.85em; margin-right: 0.6em; }
+        .doc-item .dir { color: var(--muted); }
+        .doc-item .file { color: var(--text); }
+        .doc-item .count { color: var(--faint); font-size: 0.85em; margin-left: 0.4em; }
+        .tag { display: inline-block; font-size: 0.7em; color: var(--brass); border: 1px solid var(--brass); border-radius: 2px;
+               padding: 0 4px; margin-left: 0.5em; vertical-align: 1px; }
+        .chunk-item .meta { color: var(--faint); font-size: 0.82em; font-variant-numeric: tabular-nums; margin-right: 0.5em; }
+        .chunk-item .snippet { font-family: var(--serif); color: var(--text); }
+        .chunk-item.selected .snippet { color: #fff; }
+
+        .index-progress { font-size: 0.82em; color: var(--warn); padding: 4px 12px; }
+        .placeholder { color: var(--faint); padding: 6px 12px; }
+
+        .divider { flex: 0 0 4px; cursor: col-resize; background: var(--rule); }
+        .divider:hover, .divider.dragging { background: var(--brass); }
+    </style>
+</head>
+<body>
+    <div class="page-layout">
+        <div class="left-half" id="left-half">
+            {% include "_header.html" %}
+
+            <div class="phrase-input">
+                <textarea id="phrase-input" rows="5" maxlength="{{ phrase_max_chars }}"
+                          placeholder="Paste or type a passage, a question or a few keywords. Cmd/Ctrl+Enter searches."></textarea>
+                <div class="phrase-counter" id="phrase-counter">0 / {{ phrase_max_chars }}</div>
+            </div>
+            <div class="brief-note hidden" id="brief-note"></div>
+
+            <div class="doc-path-bar" id="doc-path-bar">
+                <span id="doc-path-bar-text" class="prompt">Select a document.</span>
+                <button id="btn-finder" class="titlebar-action hidden" onclick="revealInFinder()" title="Show the file in the Finder">Show in Finder</button>
+                <button id="btn-ocr" class="titlebar-action hidden" onclick="openOcrVersion()" title="The text of this document comes from OCR. Open the OCR version (selectable text) in a new tab">OCR version</button>
+            </div>
+
+            <div class="index-progress hidden" id="index-progress"></div>
+
+            <div class="panel panel-docs">
+                <div class="panel-titlebar" id="doc-panel-titlebar">
+                    <span id="doc-panel-titlebar-text" class="prompt">Select a document</span>
+                    <button id="btn-bars" class="titlebar-action hidden" onclick="toggleScoreBars()" title="Contrast view: do the best hits stand out from the noise floor?">contrast</button>
+                </div>
+                <div class="panel-content" id="doc-list">
+                    <div class="placeholder">Loading…</div>
+                </div>
+            </div>
+
+            <div class="panel panel-chunks">
+                <div class="panel-titlebar panel-titlebar-ruled"><span class="prompt">Select a part of the document</span></div>
+                <div class="panel-content" id="chunk-list">
+                    
+                </div>
+            </div>
+        </div>
+
+        <div class="divider" id="divider"></div>
+
+        <div class="right-half">
+            <iframe id="pdf-frame"></iframe>
+        </div>
+    </div>
+
+    <script>
+        // Fuer die vollstaendige Pfadanzeige (relativer Pfad + Basis) im
+        // Frontend verfuegbar machen - kommt server-seitig ueber den
+        // bestehenden context_processor, hier nur als JS-Konstante gespiegelt.
+        const PDF_BASE_DIR = {{ pdf_base_dir_anzeige | tojson }};   // nur fuer die Anzeige (Tooltip)
+
+        let selectedDocPath = null;
+
+        // Verschiebbarer Spalten-Trenner, mit Persistenz ueber
+        // localStorage - das ist hier unproblematisch (echte, eigenstaendig
+        // laufende Web-App auf dem eigenen Rechner, kein Claude-Artifact-
+        // Sandbox-Kontext, in dem localStorage eingeschraenkt waere).
+        (function () {
+            const leftHalf = document.getElementById('left-half');
+            const divider = document.getElementById('divider');
+            const STORAGE_KEY = 'see-also-left-width-px';
+
+            let currentWidth = parseInt(localStorage.getItem(STORAGE_KEY), 10) || 600;
+            leftHalf.style.flex = `0 0 ${currentWidth}px`;
+
+            let dragging = false;
+
+            // Pointer Events statt mousedown/mousemove/mouseup: Bei reinen
+            // Maus-Events feuert "mouseup" im eigenen Dokumentkontext des
+            // iframes (pdf-frame nimmt die halbe Flaeche ein), wenn die
+            // Maustaste dort losgelassen wird - das uebergeordnete document
+            // bekommt es nie mit, "dragging" blieb dann faelschlich true
+            // haengen. setPointerCapture bindet alle folgenden
+            // Zeigerereignisse fest an divider, unabhaengig davon, worueber
+            // der Zeiger anschliessend wandert (auch ueber iframes hinweg).
+            divider.addEventListener('pointerdown', (e) => {
+                dragging = true;
+                divider.classList.add('dragging');
+                divider.setPointerCapture(e.pointerId);
+                document.body.style.userSelect = 'none';  // verhindert
+                    // Text-Markierung im Rest der Seite waehrend des Ziehens
+                e.preventDefault();
+            });
+
+            divider.addEventListener('pointermove', (e) => {
+                if (!dragging) return;
+                const minWidth = 300;
+                const maxWidth = window.innerWidth - 300;  // rechts
+                    // mindestens 300px fuer den PDF-Viewer erhalten
+                currentWidth = Math.min(Math.max(e.clientX, minWidth), maxWidth);
+                leftHalf.style.flex = `0 0 ${currentWidth}px`;
+            });
+
+            divider.addEventListener('pointerup', (e) => {
+                if (!dragging) return;
+                dragging = false;
+                divider.classList.remove('dragging');
+                divider.releasePointerCapture(e.pointerId);
+                document.body.style.userSelect = '';
+                localStorage.setItem(STORAGE_KEY, currentWidth);
+            });
+        })();
+
+        // Eigenstaendiges Polling fuer die sichtbare Fortschrittsanzeige.
+        // Adaptives Intervall: eng getaktet (1s) waehrend ein Lauf aktiv
+        // ist, deutlich seltener (5s) im Leerlauf - reicht aus, um einen
+        // anderswo gestarteten Lauf zu erkennen, ohne den Server bei
+        // Untaetigkeit staendig zu beschaeftigen (siehe vorherige Version:
+        // die pollte unbegrenzt jede Sekunde, auch wenn nichts lief).
+        (function pollIndexProgress() {
+            const el = document.getElementById('index-progress');
+            fetch('/index/status').then(r => r.json()).then(data => {
+                if (data.is_running) {
+                    el.classList.remove('hidden');
+                    el.textContent = `Indexing (${data.mode === 'full' ? 'full rebuild' : 'update'}): ${data.current} of ${data.total} PDFs`;
+                    setTimeout(pollIndexProgress, 1000);
+                } else {
+                    el.classList.add('hidden');
+                    setTimeout(pollIndexProgress, 5000);
+                }
+            });
+        })();
+
+        function encodePathSegments(path) {
+            return path.split('/').map(encodeURIComponent).join('/');
+        }
+
+        // Zeichenzaehler fuer das Phrasen-Eingabefeld.
+        const phraseInput = document.getElementById('phrase-input');
+        const phraseCounter = document.getElementById('phrase-counter');
+        const phraseMaxChars = {{ phrase_max_chars }};
+        function updatePhraseCounter() {
+            const len = phraseInput.value.length;
+            phraseCounter.textContent = `${len} / ${phraseMaxChars}`;
+            phraseCounter.classList.toggle('near-limit', len >= phraseMaxChars * 0.9 && len < phraseMaxChars);
+            phraseCounter.classList.toggle('at-limit', len >= phraseMaxChars);
+        }
+        phraseInput.addEventListener('input', updatePhraseCounter);
+
+        // Rang-basierte Einfaerbung (NICHT wertbasiert): Position in der
+        // sichtbaren Liste bestimmt die Farbe, nicht die absolute Zahl -
+        // die Scores sind nie kalibriert worden, feste Schwellenwerte
+        // wuerden eine Genauigkeit vortaeuschen, die wir nicht belegen
+        // koennen. Bewusst ein anderer Farbton (Cyan) statt nur eine
+        // andere Helligkeit desselben Amber-Tons wie der Fliesstext - ein
+        // echter Farbkontrast fuehrt das Auge staerker als ein reiner
+        // Helligkeitsunterschied innerhalb derselben Farbe.
+        function scoreColor(rank, total) {
+            const t = total > 1 ? rank / (total - 1) : 0;
+            const top = [214, 178, 116];    // G1: Messing (bester Treffer)
+            const bottom = [160, 168, 178]; // gedaempftes Grau (G1b: heller)
+            const rgb = top.map((c, i) => Math.round(c + (bottom[i] - c) * t));
+            return `rgb(${rgb.join(',')})`;
+        }
+
+        // "Finder"-Link in der Pfadzeile: Datei im Finder anzeigen, damit
+        // die Umgebung des Dokuments (z. B. Grafiken im selben Ordner)
+        // begutachtet werden kann. Bewusst ein eigener, sichtbarer Button
+        // statt einer unsichtbar klickbaren ganzen Zeile - dasselbe Muster
+        // wie "bars" rechts in der Ergebnisliste-Titelzeile.
+        window.openOcrVersion = function () {
+            if (!selectedDocPath) return;
+            window.open('/pdf-ocr/' + selectedDocPath.split('/').map(encodeURIComponent).join('/'), '_blank');
+        };
+
+        window.revealInFinder = function () {
+            if (!selectedDocPath) return;
+            fetch('/reveal-in-finder?path=' + encodeURIComponent(selectedDocPath), { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.ok) alert('Could not open the Finder: ' + (data.error || 'unknown error'));
+                });
+        };
+
+        function renderDocList(docs, scored) {
+            const list = document.getElementById('doc-list');
+            list.innerHTML = '';
+            if (docs.length === 0) {
+                list.innerHTML = '<div class="placeholder prompt">No documents indexed yet. Build the index on the status page.</div>';
+                return;
+            }
+            docs.forEach((d, i) => {
+                const el = document.createElement('div');
+                el.className = 'doc-item';
+                if (scored) {
+                    const scoreSpan = document.createElement('span');
+                    scoreSpan.className = 'score';
+                    scoreSpan.style.color = scoreColor(i, docs.length);
+                    scoreSpan.textContent = d.best_score.toFixed(3);
+                    el.appendChild(scoreSpan);
+                }
+                // G1: Ordner gedaempft, Dateiname hell, Anzahl Abschnitte klein
+                const cut = d.path.lastIndexOf('/');
+                const dir = document.createElement('span');
+                dir.className = 'dir';
+                dir.textContent = cut >= 0 ? d.path.slice(0, cut + 1) : '';
+                const file = document.createElement('span');
+                file.className = 'file';
+                file.textContent = cut >= 0 ? d.path.slice(cut + 1) : d.path;
+                const count = document.createElement('span');
+                count.className = 'count';
+                count.textContent = d.chunk_count;
+                count.title = `${d.chunk_count} passages in the index`;
+                el.append(dir, file, count);
+                if (d.ocr) {
+                    const tag = document.createElement('span');
+                    tag.className = 'tag';
+                    tag.textContent = 'OCR';
+                    tag.title = 'Text from OCR';
+                    el.appendChild(tag);
+                }
+                el.title = d.path;
+                el.dataset.ocr = d.ocr ? '1' : '';
+                el.onclick = () => selectDocument(d.path, el);
+                list.appendChild(el);
+            });
+            selectDocument(docs[0].path, list.firstChild);
+        }
+
+        function loadDocuments() {
+            document.getElementById('doc-panel-titlebar-text').textContent =
+                'Select a document';
+            document.getElementById('btn-bars').classList.add('hidden');
+            fetch('/documents').then(r => r.json()).then(docs => renderDocList(docs, false));
+        }
+
+        window.performSearch = function (phrase) {
+            document.getElementById('doc-panel-titlebar-text').textContent = 'Searching…';
+            document.getElementById('btn-bars').classList.add('hidden');
+            ownSearchRunning = true;
+            fetch('/search', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phrase: phrase }),
+            })
+                .then(r => r.json().then(data => ({ ok: r.ok, data })))
+                .then(({ ok, data }) => {
+                    if (!ok) {
+                        alert(data.error || 'Search failed.');
+                        loadDocuments();
+                        return;
+                    }
+                    document.getElementById('doc-panel-titlebar-text').textContent =
+                        'Select a document';
+                    document.getElementById('btn-bars').classList.remove('hidden');
+                    renderDocList(data.documents, true);
+                    showBrief(null, data.scope);   // eigene Suche, kein Brief
+                })
+                .finally(() => {
+                    // Zaehlerstand uebernehmen, damit die eigene Suche nicht als
+                    // "Anfrage von aussen" erneut geladen wird.
+                    return fetch('/search/serial').then(r => r.json())
+                        .then(d => { knownSerial = d.serial; })
+                        .catch(() => {})
+                        .then(() => { ownSearchRunning = false; });
+                });
+        };
+
+        function selectDocument(path, el) {
+            selectedDocPath = path;
+            document.querySelectorAll('.doc-item').forEach(e => e.classList.remove('selected'));
+            el.classList.add('selected');
+
+            const bar = document.getElementById('doc-path-bar-text');
+            bar.classList.remove('prompt');
+            bar.textContent = path;                       // G1: relativ, voller Pfad als Tooltip
+            bar.title = `${PDF_BASE_DIR}/${path}`;
+            document.getElementById('btn-finder').classList.remove('hidden');
+            document.getElementById('btn-ocr').classList.toggle('hidden', !(el && el.dataset.ocr));
+
+            fetch('/documents/chunks?path=' + encodeURIComponent(path))
+                .then(r => r.json())
+                .then(chunks => {
+                    const list = document.getElementById('chunk-list');
+                    list.innerHTML = '';
+                    const hasScores = chunks.length > 0 && chunks[0].score !== undefined;
+                    chunks.forEach((c, i) => {
+                        const chunkEl = document.createElement('div');
+                        chunkEl.className = 'chunk-item';
+                        if (hasScores) {
+                            const scoreSpan = document.createElement('span');
+                            scoreSpan.className = 'score';
+                            scoreSpan.style.color = scoreColor(i, chunks.length);
+                            scoreSpan.textContent = c.score.toFixed(3);
+                            chunkEl.appendChild(scoreSpan);
+                        }
+                        const meta = document.createElement('span');
+                        meta.className = 'meta';
+                        meta.textContent = `p. ${c.seite}`;
+                        meta.title = `Passage #${c.id}, page ${c.seite}`;
+                        const snip = document.createElement('span');
+                        snip.className = 'snippet';
+                        snip.textContent = c.snippet;
+                        chunkEl.append(meta, snip);
+                        chunkEl.onclick = () => selectChunk(path, c, chunkEl);
+                        list.appendChild(chunkEl);
+
+                        if (i === 0) {
+                            selectChunk(path, c, chunkEl);
+                        }
+                    });
+                });
+        }
+
+        function selectChunk(docPath, chunk, el) {
+            document.querySelectorAll('.chunk-item').forEach(e => e.classList.remove('selected'));
+            el.classList.add('selected');
+
+            const encodedPath = encodePathSegments(docPath);
+            const targetUrl = `/pdf/${encodedPath}#page=${chunk.seite}`;
+
+            const frame = document.getElementById('pdf-frame');
+            frame.onload = function () {
+                frame.onload = null;
+                frame.src = targetUrl;
+            };
+            frame.src = 'about:blank';
+        }
+
+        // Beim Laden: aktive Suche wiederherstellen, falls vorhanden -
+        // sonst wie bisher alphabetisch. Verhindert, dass ein
+        // Seitenwechsel (z. B. zu status.html und zurueck) eine laufende
+        // Suche stillschweigend verwirft.
+        // Briefkasten: Hinweiszeile, wenn die letzte Suche von aussen kam
+        // (Knopf "Anfrage an see_also" in Obsidian).
+        function scopeText(scope) {
+            if (!scope) return '';
+            const names = scope.bereiche.length <= 3 ? scope.bereiche.join(', ')
+                : scope.bereiche.slice(0, 3).join(', ') + ' …';
+            return `Searching ${scope.bereiche.length} of ${scope.von} areas (${names})`;
+        }
+
+        function showBrief(brief, scope) {
+            const el = document.getElementById('brief-note');
+            el.textContent = '';
+            if (!brief && !scope) { el.classList.add('hidden'); return; }
+            if (!brief) {
+                const w = document.createElement('span');
+                w.className = 'warn';
+                w.textContent = scopeText(scope);
+                el.appendChild(w);
+                el.classList.remove('hidden');
+                return;
+            }
+            const woher = brief.herkunft || 'another app';
+            const zeit = (brief.zeit || '').slice(11, 16);
+            let t = `Request from ${woher}`;
+            if (brief.quelle) t += `: ${brief.quelle}`;
+            if (brief.art) t += ` (${({Markierung: 'selection', Notiz: 'whole note', 'ganze Notiz': 'whole note'})[brief.art] || brief.art})`;
+            if (zeit) t += `, ${zeit}`;
+            el.appendChild(document.createTextNode(t));
+            if (brief.gekuerzt) {
+                const w = document.createElement('span');
+                w.className = 'warn';
+                w.textContent = ` – shortened: searched ${brief.zeichen_gesucht} of ${brief.zeichen} characters`;
+                el.appendChild(w);
+            }
+            if (scope) {
+                const w = document.createElement('span');
+                w.className = 'warn';
+                w.textContent = ' – ' + scopeText(scope);
+                el.appendChild(w);
+            }
+            el.classList.remove('hidden');
+        }
+
+        let knownSerial = null;   // Stand der letzten Suche, die diese Seite zeigt
+
+        function restoreLastSearch() {
+            return fetch('/search/last').then(r => r.json()).then(data => {
+            knownSerial = data.serial;
+            showBrief(data.brief, data.scope);
+            if (data.phrase) {
+                phraseInput.value = data.phrase;
+                updatePhraseCounter();
+                document.getElementById('doc-panel-titlebar-text').textContent =
+                    'Select a document';
+                document.getElementById('btn-bars').classList.remove('hidden');
+                renderDocList(data.documents, true);
+            } else {
+                // Keine aktive Suche - u.a. der Fall direkt nach einem
+                // Server-Neustart, da das Server-Gedaechtnis (LAST_SEARCH_*)
+                // dabei verloren geht. Denselben leeren Zustand herstellen
+                // wie bei "clear" (siehe clearResultsView() weiter unten),
+                // statt automatisch die alphabetische Liste mit
+                // ausgewaehltem ersten Dokument und dessen PDF zu zeigen.
+                clearResultsView();
+            }
+            });
+        }
+        restoreLastSearch();
+
+        // Kommt eine Anfrage ueber den Briefkasten, waehrend diese Seite offen
+        // ist, wird sie ohne Neuladen angezeigt. /search/serial ist billig
+        // (kein Plattenzugriff). Eigene Suchen dieser Seite aendern den Zaehler
+        // auch; dann wird nur die Hinweiszeile aktualisiert.
+        let ownSearchRunning = false;
+        setInterval(() => {
+            if (ownSearchRunning) return;
+            fetch('/search/serial').then(r => r.json()).then(d => {
+                if (knownSerial !== null && d.serial !== knownSerial && !ownSearchRunning) {
+                    restoreLastSearch();
+                }
+            }).catch(() => {});
+        }, 1500);
+
+        // --- Kontrastfunktion ("bars") ---
+        // Ruft score_contrast.py als Subprozess auf (--no-open, --out); der
+        // Server liest die erzeugte HTML-Seite und schickt ihren Inhalt
+        // zurueck. Anzeige VORUEBERGEHEND im bestehenden pdf-frame selbst
+        // (per srcdoc), nicht in einer zusaetzlichen Ebene darueber - ein
+        // separates Overlay liess das native PDF-Plugin durchscheinen
+        // (eigene, z-index-resistente Rendering-Ebene des Browsers).
+        // Dieselbe about:blank-vor-Neuinhalt-Sequenz wie bei selectChunk()
+        // oben, damit der Frame auch bei identischer Ziel-URL zuverlaessig
+        // neu laedt.
+        //
+        // Bistabiler Schalter: 1. Klick auf "bars" zeigt die Balken,
+        // 2. Klick stellt das PDF wieder her - kein separater
+        // Schliessen-Button mehr.
+        let savedPdfSrc = null;
+        let barsVisible = false;
+
+        function hideScoreBars() {
+            const frame = document.getElementById('pdf-frame');
+            frame.onload = function () {
+                frame.onload = null;
+                if (savedPdfSrc && savedPdfSrc !== 'about:blank') {
+                    frame.src = savedPdfSrc;
+                }
+            };
+            frame.removeAttribute('srcdoc');
+            frame.src = 'about:blank';
+            barsVisible = false;
+        }
+
+        window.toggleScoreBars = function () {
+            if (barsVisible) {
+                hideScoreBars();
+                return;
+            }
+
+            const btn = document.getElementById('btn-bars');
+            btn.disabled = true;
+            fetch('/scores/bars', { method: 'POST' })
+                .then(r => r.json().then(data => ({ ok: r.ok, data })))
+                .then(({ ok, data }) => {
+                    if (!ok) {
+                        alert(data.error || 'Could not build the contrast view.');
+                        return;
+                    }
+                    const frame = document.getElementById('pdf-frame');
+                    savedPdfSrc = frame.src;
+                    frame.onload = function () {
+                        frame.onload = null;
+                        frame.srcdoc = data.html;
+                    };
+                    frame.removeAttribute('srcdoc');
+                    frame.src = 'about:blank';
+                    barsVisible = true;
+                })
+                .finally(() => { btn.disabled = false; });
+        };
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && barsVisible) hideScoreBars();
+        });
+        // G1: Cmd/Ctrl+Enter im Textfeld startet die Suche
+        phraseInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                window.triggerSearch();
+            }
+        });
+
+        // Gegenstueck zu "clear" im Header (siehe _header.html): Mit
+        // leerer Phrase sind Ergebnisse, Chunks und PDF-Anzeige veraltete
+        // Information. Bewusst KEIN Rueckfall auf die alphabetische Liste
+        // (renderDocList() waehlt dabei automatisch das erste Dokument aus
+        // und zeigt dessen PDF - genau das Gegenteil von "kein PDF mehr
+        // angezeigt"), sondern ein echter "nichts ausgewaehlt"-Zustand,
+        // der so vorher im Programmablauf gar nicht vorkam.
+        window.clearResultsView = function () {
+            document.getElementById('doc-panel-titlebar-text').textContent = 'No search yet, no documents to show';
+            document.getElementById('btn-bars').classList.add('hidden');
+            document.getElementById('doc-list').innerHTML =
+                '';
+            document.getElementById('chunk-list').innerHTML =
+                '';
+            document.getElementById('doc-path-bar-text').textContent = 'Select a document.';
+            document.getElementById('doc-path-bar-text').classList.add('prompt');
+            document.getElementById('doc-path-bar-text').title = '';
+            document.getElementById('btn-finder').classList.add('hidden');
+            document.getElementById('btn-ocr').classList.add('hidden');
+
+            const frame = document.getElementById('pdf-frame');
+            frame.onload = null;  // keine laufende Nachlade-Sequenz uebrig lassen
+            frame.removeAttribute('srcdoc');
+            frame.src = 'about:blank';
+            barsVisible = false;
+            savedPdfSrc = null;
+
+            // Server vergisst die letzte Suche mit - sonst wuerde ein
+            // Neuladen der Seite sie ueber /search/last sofort wieder
+            // herstellen (siehe app.py, /search/clear).
+            fetch('/search/clear', { method: 'POST' }).catch(() => {});
+        };
+    </script>
+</body>
+</html>

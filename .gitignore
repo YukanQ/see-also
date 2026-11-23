@@ -1,0 +1,29 @@
+# Python environment
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local settings and data (created when you use see_also)
+config.json
+suchbereich.json
+suchbereich.json.tmp
+see_also.db
+see_also.db-wal
+see_also.db-shm
+see_also.db.tmp*
+indexlauf.lock
+logs/
+backups/
+*.tmp
+
+# Your PDFs never belong here - only the sample library
+*.pdf
+!examples/sample-library/**/*.pdf
+
+# Editors and systems
+.DS_Store
+.obsidian/
+.idea/
+.vscode/
+*.zip

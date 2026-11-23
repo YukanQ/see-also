@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>see also: status</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='see_also.css') }}">
+    <style>
+        body { margin: 0; }
+        main { padding: 0.4em 1.6em 3em; max-width: 72em; }
+        h1 { font-family: var(--serif); font-weight: normal; font-size: 1.6em; margin: 0; }
+        h2 { font-size: 1em; font-weight: 600; margin: 0 0 0.3em; }
+        .page-title-row { display: flex; align-items: baseline; gap: 1.2em; margin-bottom: 1.2em; }
+        section.block { border-top: 1px solid var(--rule); padding: 1em 0 1.1em; }
+        main > section.block:first-child { border-top: none; }
+
+        .scope-list { columns: 3 15em; column-gap: 2em; margin: 0.6em 0 0.8em; }
+        .scope-list label { display: block; padding: 2px 0; break-inside: avoid; cursor: pointer; }
+        .scope-list input { accent-color: var(--brass); margin-right: 0.4em; }
+        .scope-list .n { color: var(--faint); font-size: 0.85em; margin-left: 0.3em; font-variant-numeric: tabular-nums; }
+        .scope-list .grau { color: var(--faint); cursor: default; }
+        .scope-actions { display: flex; gap: 0.5em; align-items: baseline; }
+        .scope-state { margin-left: 0.6em; color: var(--muted); font-size: 0.9em; }
+        .scope-state.warn { color: var(--prompt); }
+
+        .status table { border-collapse: collapse; }
+        .status td { padding: 3px 18px 3px 0; vertical-align: top; }
+        .status td.label { color: var(--muted); white-space: nowrap; }
+        .status td.value { font-variant-numeric: tabular-nums; }
+        .box-controls { display: flex; flex-wrap: wrap; gap: 0.6em; align-items: center; margin-top: 1em; }
+        #chunk_id { width: 7em; padding: 1px 8px; font-size: 0.85em; line-height: 1.5; }
+        .progress { margin-top: 0.8em; color: var(--warn); }
+        .cancel-btn { margin-top: 0.5em; }
+        #chunk-result:not(:empty) { margin-bottom: 1em; }
+
+        .problem-files-table, .missing-files-table { border-collapse: collapse; margin-top: 0.4em; }
+        .problem-files-table td, .missing-files-table td { padding: 3px 14px 3px 0; vertical-align: top; }
+        .befund { white-space: nowrap; color: var(--warn); }
+        .befund-absturz, .befund-zeitlimit { color: var(--error); }
+        .meldung { color: var(--muted); font-size: 0.85em; max-width: 30em; }
+        .missing-path { word-break: break-word; }
+        .ocr-zustand { color: var(--faint); font-size: 0.88em; white-space: nowrap; }
+        .ocr-log { margin-top: 0.6em; }
+        details { margin-top: 0.7em; }
+        .links .btn { margin-right: 0.5em; }
+        .chunk-table { border-collapse: collapse; }
+        .chunk-table td { padding: 3px 18px 3px 0; vertical-align: top; }
+        .chunk-table td.label { color: var(--muted); white-space: nowrap; }
+        .chunk-text { font-family: var(--serif); max-width: 40em; }
+    </style>
+</head>
+<body>
+    {% include "_header.html" %}
+    <main>
+
+    <section class="block scope-box" id="scope-box">
+        <h2>Search scope</h2>
+        <p class="hint" style="max-width:none">Applies to every search, including requests from Obsidian. Areas excluded in config.json are not listed.<br>
+        The number after each name is its count of indexed passages.</p>
+        <div class="scope-list" id="scope-list"><span class="unavailable">Loading…</span></div>
+        <div class="scope-actions">
+            <button class="btn small" onclick="scopeSetAll(true)">Select all</button>
+            <button class="btn small" onclick="scopeSetAll(false)">Select none</button>
+            <button class="btn small primary" onclick="scopeSave()">Apply</button>
+            <span class="scope-state" id="scope-state"></span>
+        </div>
+    </section>
+
+    <!-- Ergebnis von "Chunk anzeigen Nr." steht oben (frueher unter dem
+         ganzen Statuskasten, also hinter der Liste der fehlenden Dateien,
+         bei einem grossen Bereich ueber 2.500 Zeilen tiefer und damit unsichtbar). -->
+    <div id="chunk-result"></div>
+
+    <div class="status" id="status-container">
+        {% include "_status_block.html" %}
+    </div>
+    </main>
+
+    <script>
+        // Bewusst KEIN einmalig gecachtes Array mehr: btn-incremental,
+        // btn-full und btn-anzeigen liegen jetzt INNERHALB von
+        // _status_block.html und werden bei jedem refreshStatus() per
+        // innerHTML ersetzt - ein gecachtes Element wuerde nach dem ersten
+        // Refresh auf einen bereits entfernten DOM-Knoten zeigen (gleiches
+        // Muster/gleicher Fehler, den wir bei den OCR-Buttons schon einmal
+        // behoben haben).
+        const CONTROL_BUTTON_IDS = ['btn-incremental', 'btn-full', 'btn-anzeigen'];
+
+        let pollHandle = null;
+        let wasRunning = false;  // letzter bekannter Zustand - noetig, um
+                                  // "gerade fertig geworden" von "lief nie"
+                                  // zu unterscheiden (siehe Bugfix-Erklaerung).
+
+        // G1c: Indexlauf und OCR-Lauf schliessen sich aus (der Server lehnt
+        // den zweiten ab). Die Knoepfe zeigen das: waehrend des einen sind die
+        // Startknoepfe des anderen grau.
+        let indexLaeuft = false;
+        let ocrLaeuft = false;
+
+        function knoepfeAnwenden() {
+            const indexGesperrt = indexLaeuft || ocrLaeuft;
+            CONTROL_BUTTON_IDS.forEach(id => {
+                const btn = document.getElementById(id);
+                if (!btn) return;  // kann kurz fehlen, direkt nach einem Refresh
+                btn.disabled = indexGesperrt;
+                btn.classList.toggle('ready', !indexGesperrt);
+                btn.classList.toggle('blocked', indexGesperrt);
+            });
+            const b = document.getElementById('btn-ocr-lauf');
+            if (b) {
+                const ocrGesperrt = ocrLaeuft || indexLaeuft;
+                b.disabled = ocrGesperrt;
+                b.classList.toggle('ready', !ocrGesperrt);
+                b.classList.toggle('blocked', ocrGesperrt);
+            }
+        }
+
+        function setButtonState(isRunning) {
+            indexLaeuft = !!isRunning;
+            knoepfeAnwenden();
+        }
+
+        function cancelIndexing() {
+            const btn = document.getElementById('btn-cancel');
+            if (btn) btn.disabled = true;   // sofortiges Feedback, Doppelklick vermeiden
+            fetch('/index/cancel', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.cancelling && data.reason === 'too_late') {
+                        alert('The index is being saved; this step cannot be cancelled.');
+                    }
+                });
+        }
+
+        function startIndexing(mode) {
+            setButtonState(true);  // sofortiges Feedback vor dem ersten Poll
+            fetch(`/index/start/${mode}`, { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.started) {
+                        alert(data.reason === 'running_elsewhere'
+                            ? 'An indexing run is still active in its own process (perhaps from an earlier server session). Wait for it to finish or end that process.'
+                            : data.reason === 'ocr_running'
+                            ? 'An OCR run is active. Update the index after it has finished, or stop OCR first.'
+                            : 'An indexing run is already active.');
+                    }
+                    wasRunning = true;  // wir wissen: ab jetzt laeuft etwas
+                    ensurePolling();
+                });
+        }
+
+        function ensurePolling() {
+            if (pollHandle) return;
+            pollHandle = setInterval(pollStatus, 1000);
+        }
+
+        function stopPolling() {
+            if (pollHandle) {
+                clearInterval(pollHandle);
+                pollHandle = null;
+            }
+        }
+
+        function pollStatus() {
+            fetch('/index/status')
+                .then(r => r.json())
+                .then(data => {
+                    setButtonState(data.is_running);
+
+                    const cancelBtn = document.getElementById('btn-cancel');
+                    if (cancelBtn) {
+                        const cancellable = data.is_running && data.phase !== 'save';
+                        cancelBtn.classList.toggle('hidden', !cancellable);
+                        cancelBtn.disabled = !!data.cancel_requested;
+                    }
+                    if (data.is_running) {
+                        wasRunning = true;
+                        progressEl().classList.remove('hidden');
+                        const phaseLabels = {
+                            scan: 'Looking for files',
+                            extract: null,
+                            merge: 'Numbering passages',
+                            embed: null,
+                            save: 'Saving the index'
+                        };
+                        const label = phaseLabels[data.phase];
+                        let text;
+                        if (data.phase === 'embed') {
+                            text = embedText(data);
+                        } else {
+                            text = label
+                                ? label
+                                : `Reading PDFs: ${data.current} of ${data.total}`;
+                        }
+                        if (data.cancel_requested) {
+                            text = 'Stopping at the next safe point. ' + text;
+                        }
+                        progressEl().textContent = text;
+                    } else {
+                        progressEl().classList.add('hidden');
+                        // Reload NUR beim echten Uebergang laeuft -> fertig,
+                        // nicht bei jedem Poll, der zufaellig "false" meldet.
+                        if (wasRunning) {
+                            wasRunning = false;
+                            stopPolling();
+                            refreshStatus();  // statt location.reload() - stoert
+                                               // eine laufende Eingabe im Formular nicht mehr
+                        }
+                    }
+                });
+        }
+
+        function fmtDuration(sec) {
+            sec = Math.max(0, Math.round(sec));
+            const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+            if (h > 0) return `${h} h ${m} min`;
+            if (m > 0) return `${m} min ${s} s`;
+            return `${s} s`;
+        }
+
+        function embedText(d) {
+            if (!d.embed_total) return 'Embedding starts (loading the model)';
+            const pct = Math.floor(100 * d.embed_done / d.embed_total);
+            let t = `Embedding: ${d.embed_done.toLocaleString('en')} of ${d.embed_total.toLocaleString('en')} passages (${pct} %)`;
+            if (d.embed_rate) {
+                t += `, ${d.embed_rate.toFixed(1)} per second, about ${fmtDuration(d.embed_eta)} left`;
+            } else if (d.embed_done === 0) {
+                t += ', loading the model';
+            } else {
+                t += ', measuring speed';
+            }
+            return t;
+        }
+
+        function progressEl() {
+            return document.getElementById('progress');
+        }
+
+        // --- Suchbereich (B3). Liegt ausserhalb von #status-container und wird
+        // deshalb vom automatischen Neuladen nicht ueberschrieben, waehrend
+        // man Kaestchen anklickt.
+        // scopeDirty: Kaestchen geaendert, aber nicht uebernommen. Solange
+        // das gilt, erneuert das automatische Neuladen den Kasten nicht.
+        let scopeDirty = false;
+        function scopeLoad() {
+            fetch('/suchbereich').then(r => r.json()).then(d => {
+                if (scopeDirty) return;
+                const list = document.getElementById('scope-list');
+                list.textContent = '';
+                if (!d.bereiche.length && !(d.weitere || []).length) {
+                    list.innerHTML = '<span class="prompt">No index yet. Create it with “Rebuild index” below.</span>';
+                    return;
+                }
+                d.bereiche.forEach(b => {
+                    const lab = document.createElement('label');
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox'; cb.value = b.name; cb.checked = b.gewaehlt;
+                    cb.addEventListener('change', scopeMarkDirty);
+                    const n = document.createElement('span');
+                    n.className = 'n'; n.textContent = b.chunks.toLocaleString('en');
+                    lab.appendChild(cb);
+                    lab.appendChild(document.createTextNode(' ' + b.name));
+                    lab.appendChild(n);
+                    list.appendChild(lab);
+                });
+                (d.weitere || []).forEach(b => {
+                    const lab = document.createElement('label');
+                    lab.className = 'grau';
+                    lab.title = b.hinweis === 'no text'
+                        ? 'Contains PDFs, but none with a text layer (scans). Run OCR.'
+                        : (b.hinweis === 'no PDFs' ? 'Folder without PDFs.'
+                           : 'Included; indexed by the next run.');
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox'; cb.disabled = true;
+                    const n = document.createElement('span');
+                    n.className = 'n'; n.textContent = b.hinweis;
+                    lab.appendChild(cb);
+                    lab.appendChild(document.createTextNode(' ' + b.name));
+                    lab.appendChild(n);
+                    list.appendChild(lab);
+                });
+                scopeShowState(d.alle ? 'All areas' : 'Limited', !d.alle);
+            }).catch(() => {});
+        }
+        function scopeBoxes() {
+            return Array.from(document.querySelectorAll('#scope-list input[type=checkbox]:not(:disabled)'));
+        }
+        function scopeShowState(text, warn) {
+            const el = document.getElementById('scope-state');
+            el.textContent = text;
+            el.classList.toggle('warn', !!warn);
+        }
+        function scopeMarkDirty() { scopeDirty = true; scopeShowState('Not applied yet', true); }
+        window.scopeSetAll = function (on) {
+            scopeBoxes().forEach(cb => { cb.checked = on; });
+            scopeMarkDirty();
+        };
+        window.scopeSave = function () {
+            const boxes = scopeBoxes();
+            const chosen = boxes.filter(cb => cb.checked).map(cb => cb.value);
+            if (!chosen.length) { alert('Select at least one area.'); return; }
+            const body = { bereiche: chosen.length === boxes.length ? null : chosen };
+            fetch('/suchbereich', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            }).then(r => r.json()).then(d => {
+                if (!d.ok) { alert(d.error || 'Could not save the search scope.'); return; }
+                scopeDirty = false;
+                scopeLoad();
+            });
+        };
+        scopeLoad();
+
+        function refreshStatus() {
+            // status-container enthaelt inzwischen auch die Indizierungs-
+            // Buttons UND das Chunk-Eingabefeld (liegen jetzt im Kasten,
+            // siehe _status_block.html). Der eingegebene Wert wird ueber
+            // den Austausch hinweg erhalten, damit ein automatischer
+            // Refresh mitten in der Eingabe sie nicht einfach loescht.
+            const chunkInput = document.getElementById('chunk_id');
+            const preservedValue = chunkInput ? chunkInput.value : '';
+
+            scopeLoad();   // Kasten mit erneuern (nicht, solange ungespeicherte Haken)
+            fetch('/status/panel')
+                .then(r => r.text())
+                .then(html => {
+                    document.getElementById('status-container').innerHTML = html;
+                    const newInput = document.getElementById('chunk_id');
+                    if (newInput && preservedValue) newInput.value = preservedValue;
+                    fetch('/ocr/lauf/status').then(r => r.json()).then(ocrAnzeigen);
+                });
+        }
+
+        // Automatische Aktualisierung im Minutentakt.
+        // P1: nur auffrischen, solange die Seite sichtbar ist; beim Zurueckkehren
+        // in den Tab sofort, wenn die letzte Auffrischung laenger her ist.
+        let letzteAuffrischung = Date.now();
+        setInterval(() => {
+            if (document.hidden) return;
+            letzteAuffrischung = Date.now();
+            refreshStatus();
+        }, 60000);
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && Date.now() - letzteAuffrischung > 60000) {
+                letzteAuffrischung = Date.now();
+                refreshStatus();
+            }
+        });
+
+        // btn-anzeigen liegt jetzt im periodisch ersetzten Bereich - daher
+        // bewusst inline onclick (siehe HTML) statt addEventListener, das
+        // nach dem ersten Refresh am alten, bereits entfernten DOM-Knoten
+        // haengen wuerde. Der fruehere "neuer Tab"-Button entfaellt (siehe
+        // Wunsch), damit auch die Begruendung fuer seine native
+        // Formular-Sonderbehandlung.
+        window.triggerChunkLookup = function () {
+            const chunkId = document.getElementById('chunk_id').value;
+            if (!chunkId) return;
+            const box = document.getElementById('chunk-result');
+            box.innerHTML = '<p class="unavailable">Loading passage ' + chunkId + '…</p>';
+            box.scrollIntoView({ block: 'nearest' });
+            fetch(`/chunk/${chunkId}/panel`)
+                .then(r => r.text())
+                .then(html => {
+                    box.innerHTML = html;
+                    box.scrollIntoView({ block: 'nearest' });
+                })
+                .catch(() => { box.innerHTML = '<p>Could not load passage ' + chunkId + '.</p>'; });
+        };
+
+        // --- O1: OCR-Lauf fuer fehlende Dateien ---
+        // Knopf, Fortschritt und Log liegen im periodisch ersetzten Block; die
+        // Anzeige wird deshalb nach jedem Neuladen aus /ocr/lauf/status gefuellt.
+        let ocrPollHandle = null;
+        let ocrWasRunning = false;
+
+        function ocrSetButtons(running, cancelRequested) {
+            ocrLaeuft = !!running;
+            knoepfeAnwenden();
+            const c = document.getElementById('btn-ocr-cancel');
+            if (c) {
+                c.classList.toggle('hidden', !running);
+                c.disabled = !!cancelRequested;
+            }
+        }
+
+        function ocrText(d) {
+            const ph = {
+                start: 'OCR run starting',
+                pruefen: `Checking files: ${d.current} of ${d.total}`,
+                ocr: `OCR: file ${d.current} of ${d.total}, page ${d.seiten_fertig.toLocaleString('en')} of ${d.seiten_gesamt.toLocaleString('en')}`
+                     + (d.s_je_seite ? `, ${d.s_je_seite} s per page, about ${fmtDuration(d.eta_s || 0)} left` : '')
+                     + `; ${d.erfasst} with text, ${d.nicht_erfasst} without result`,
+                done: (d.erfasst || d.nicht_erfasst)
+                      ? `OCR run finished: ${d.erfasst} with text, ${d.nicht_erfasst} without result. `
+                        + (d.erfasst ? 'The next “Update index” makes them searchable.' : '')
+                      : 'Nothing to do: no file needs OCR.',
+                cancelled: `OCR run stopped: ${d.erfasst} with text, ${d.nicht_erfasst} without result. The next run continues from here.`,
+                error: 'OCR run ended with an error: ' + (d.error || ''),
+            };
+            let t = ph[d.phase] || '';
+            if (d.is_running && d.cancel_requested) t = 'Stopping… ' + t;
+            if (d.log_file) t += `  (log: logs/${d.log_file})`;
+            return t;
+        }
+
+        function ocrAnzeigen(d) {
+            ocrSetButtons(d.is_running, d.cancel_requested);
+            const p = document.getElementById('ocr-progress');
+            const l = document.getElementById('ocr-log');
+            if (!p || !l) return;
+            const sichtbar = d.is_running || (d.phase && d.phase !== null);
+            p.classList.toggle('hidden', !sichtbar);
+            p.textContent = sichtbar ? ocrText(d) : '';
+            if (!d.is_running && (d.phase === 'done' || d.phase === 'cancelled')) {
+                p.append(' ');
+                const a = document.createElement('a');
+                a.href = '/problemfaelle'; a.textContent = 'Files to review';
+                p.append(a);
+            }
+            const zeilen = d.zeilen || [];
+            l.classList.toggle('hidden', zeilen.length === 0);
+            const unten = l.scrollTop + l.clientHeight >= l.scrollHeight - 5;
+            l.textContent = zeilen.join('\n');
+            if (unten) l.scrollTop = l.scrollHeight;
+        }
+
+        function pollOcr() {
+            fetch('/ocr/lauf/status').then(r => r.json()).then(d => {
+                ocrAnzeigen(d);
+                if (d.is_running) {
+                    ocrWasRunning = true;
+                    ensureOcrPolling();
+                } else if (ocrWasRunning) {
+                    ocrWasRunning = false;
+                    stopOcrPolling();
+                    refreshStatus();   // Zahlen und Listen erneuern
+                }
+            });
+        }
+
+        function ensureOcrPolling() {
+            if (ocrPollHandle) return;
+            ocrPollHandle = setInterval(pollOcr, 2000);
+        }
+
+        function stopOcrPolling() {
+            if (ocrPollHandle) { clearInterval(ocrPollHandle); ocrPollHandle = null; }
+        }
+
+        window.startOcrLauf = function () {
+            const eingabe = prompt('How many files without text should OCR process?\n'
+                + 'A number, or “all”. Small files come first.', '20');
+            if (eingabe === null) return;
+            const w = eingabe.trim().toLowerCase();
+            let anzahl = null;
+            if (w !== 'all' && w !== 'alle' && w !== '') {
+                anzahl = parseInt(w, 10);
+                if (!(anzahl > 0)) { alert('Enter a number greater than 0, or “all”.'); return; }
+            }
+            ocrSetButtons(true, false);
+            fetch('/ocr/lauf/start', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ anzahl: anzahl }),
+            }).then(r => r.json()).then(d => {
+                if (!d.started) {
+                    const msg = {
+                        index_running: 'An indexing run is active. Start OCR after it has finished.',
+                        already_running: 'An OCR run is already active.',
+                        no_index: 'There is no index yet. Build it first.',
+                    }[d.reason] || ('OCR run not started (' + d.reason + ').');
+                    alert(msg);
+                }
+                ocrWasRunning = true;
+                ensureOcrPolling();
+            });
+        };
+
+        window.cancelOcrLauf = function () {
+            const c = document.getElementById('btn-ocr-cancel');
+            if (c) c.disabled = true;
+            fetch('/ocr/lauf/cancel', { method: 'POST' });
+        };
+
+        // Beim Laden: laufenden oder letzten Lauf anzeigen.
+        pollOcr();
+
+        // Einmaliger Check beim Laden: falls z. B. in einem anderen Tab
+        // bereits eine Indizierung laeuft, wird das erkannt, OHNE bei
+        // "nichts laeuft" faelschlich einen Reload auszuloesen.
+        fetch('/index/status')
+            .then(r => r.json())
+            .then(data => {
+                setButtonState(data.is_running);
+                if (data.is_running) {
+                    wasRunning = true;
+                    ensurePolling();
+                }
+            });
+    </script>
+</body>
+</html>

@@ -1,0 +1,88 @@
+{# Gemeinsame Styles und Skripte fuer problemfaelle.html und ohne_text.html #}
+    <link rel="stylesheet" href="{{ url_for('static', filename='see_also.css') }}">
+    <style>
+        body { margin: 0; }
+        main { padding: 1.2em 1.6em 3em; max-width: 90em; }
+        .page-title-row { display: flex; align-items: baseline; gap: 1.2em; margin-bottom: 0.5em; flex-wrap: wrap; }
+        .page-title-row h1 { font-family: var(--serif); font-weight: normal; font-size: 1.6em; margin: 0; }
+        .intro { color: var(--muted); max-width: 46em; margin: 0 0 1.2em; }
+        .intro code { color: var(--text); font-family: var(--mono); font-size: 0.9em; }
+        .knopf { font: inherit; font-size: 0.82em; background: transparent; color: var(--text); border: 1px solid var(--rule);
+                 border-radius: var(--r); padding: 1px 8px; cursor: pointer; }
+        .knopf:hover { border-color: var(--muted); }
+        nav.inhalt { margin: 0 0 1.4em; line-height: 2; }
+        nav.inhalt a { margin-right: 1.4em; white-space: nowrap; }
+        section { border-top: 1px solid var(--rule); padding: 0.9em 0 1em; }
+        section h2 { font-size: 1em; font-weight: 600; margin: 0 0 0.3em; display: flex; align-items: baseline; gap: 0.8em; }
+        section h2 .n { color: var(--faint); font-weight: normal; font-variant-numeric: tabular-nums; }
+        section .erkl { color: var(--muted); font-size: 0.9em; margin: 0 0 0.6em; max-width: 46em; }
+        table { border-collapse: collapse; width: 100%; }
+        td { padding: 3px 12px 3px 0; vertical-align: top; }
+        td.knoepfe { white-space: nowrap; width: 1%; }
+        td.groesse { color: var(--faint); text-align: right; white-space: nowrap; width: 1%; font-size: 0.85em; font-variant-numeric: tabular-nums; }
+        td.pfad { word-break: break-word; }
+        td.pfad .ordner { color: var(--muted); }
+        td.detail { color: var(--muted); font-size: 0.85em; max-width: 28em; }
+        tr.gesehen td.pfad, tr.gesehen td.pfad .ordner { color: var(--faint); }
+        tr.gesehen .knopf.finder::after { content: " ✓"; }
+        .leer { color: var(--muted); }
+        .meldung { color: var(--error); margin-left: 0.6em; font-size: 0.9em; }
+        .kopieren { border-color: var(--warn); margin-left: 0.8em; }
+        .kopiert { color: var(--prompt); margin-left: 0.6em; font-size: 0.85em; }
+        details.bereich { border: 1px solid var(--rule); background: var(--panel); padding: 0.4em 1em; margin-bottom: 0.8em; max-width: 110em; }
+        details.bereich summary { cursor: pointer; color: var(--text); }
+        details.bereich summary .n { color: var(--faint); }
+    </style>
+    <script>
+        function zeileVon(btn) { return btn.closest('tr'); }
+
+        function finder(btn) {
+            const tr = zeileVon(btn);
+            const p = tr.dataset.path;
+            fetch('/reveal-in-finder?path=' + encodeURIComponent(p), { method: 'POST' })
+                .then(r => r.json().then(d => ({ ok: r.ok && d.ok, d: d })))
+                .then(({ ok, d }) => {
+                    if (ok) { tr.classList.add('gesehen'); return; }
+                    meldung(tr, 'Finder: ' + (d.error || 'file not found (deleted?)'));
+                })
+                .catch(() => meldung(tr, 'Finder: no answer from the server'));
+        }
+
+        function oeffnen(btn) {
+            const tr = zeileVon(btn);
+            tr.classList.add('gesehen');
+            const url = '/pdf/' + tr.dataset.path.split('/').map(encodeURIComponent).join('/');
+            window.open(url, '_blank');
+        }
+
+        function meldung(tr, text) {
+            const td = tr.querySelector('td.detail');
+            let m = td.querySelector('.meldung');
+            if (!m) { m = document.createElement('span'); m.className = 'meldung'; td.appendChild(m); }
+            m.textContent = text;
+        }
+
+        // Befehl "in den Papierkorb" fuer alle Zeilen eines Abschnitts. Jeder Pfad
+        // in einfachen Anfuehrungszeichen (enthaltene ' als '\''), alles auf einer
+        // Zeile, damit zsh beim Einfuegen nichts einzeln ausfuehrt.
+        function shellQuote(p) { return "'" + p.replace(/'/g, "'\\''") + "'"; }
+        function befehlKopieren(btn, base, ziel) {
+            const sec = btn.closest('section');
+            const pfade = [...sec.querySelectorAll('tr[data-path]')].map(tr => base + '/' + tr.dataset.path);
+            const befehl = 'mv -n -v -- ' + pfade.map(shellQuote).join(' ') + ' ' + ziel;
+            const fertig = () => {
+                let m = btn.parentElement.querySelector('.kopiert');
+                if (!m) { m = document.createElement('span'); m.className = 'kopiert'; btn.after(m); }
+                m.textContent = `Command for ${pfade.length} files copied. Paste it into Terminal, check it, press Return.`;
+            };
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(befehl).then(fertig, () => alt(befehl, fertig));
+            } else { alt(befehl, fertig); }
+        }
+        function alt(text, fertig) {
+            const ta = document.createElement('textarea');
+            ta.value = text; document.body.appendChild(ta); ta.select();
+            try { document.execCommand('copy'); fertig(); } catch (e) { alert('Could not copy to the clipboard.'); }
+            ta.remove();
+        }
+    </script>

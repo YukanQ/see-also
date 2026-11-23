@@ -1,0 +1,15 @@
+{% if meta is none %}
+    <p class="muted">Passage {{ chunk_id }} is not in the current index.</p>
+{% else %}
+    <section class="block">
+    <h2>Passage {{ chunk_id }}</h2>
+    <table class="chunk-table">
+        <tr><td class="label">File</td><td>{{ meta.dateiname }}</td></tr>
+        <tr><td class="label">Page</td><td>{{ meta.seite }}</td></tr>
+        <tr><td class="label">Line</td><td>{{ meta.zeile if meta.zeile is not none else "unknown" }}</td></tr>
+        <tr><td class="label">File changed</td><td>{{ meta.mtime }}</td></tr>
+        <tr><td class="label">Text</td><td class="chunk-text">{{ meta.textausschnitt }}</td></tr>
+    </table>
+    <p><a href="{{ meta.pdf_link }}" target="_blank">Open page {{ meta.seite }} of the PDF</a></p>
+    </section>
+{% endif %}

@@ -1,0 +1,4 @@
+# What the test suite needs. No model, no PyTorch, no PyMuPDF: the cases use stand-ins.
+flask
+numpy
+pytest

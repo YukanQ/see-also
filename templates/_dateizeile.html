@@ -1,0 +1,12 @@
+{% macro zeile(z) %}
+{% set teile = z.path.rsplit('/', 1) %}
+<tr data-path="{{ z.path }}">
+    <td class="knoepfe">
+        <button class="knopf finder" onclick="finder(this)" title="Show the file in the Finder">Finder</button>
+        <button class="knopf" onclick="oeffnen(this)" title="Open in a new tab">Open</button>
+    </td>
+    <td class="groesse">{% if z.groesse is none %}–{% elif z.groesse < 1000000 %}{{ '%.0f'|format(z.groesse / 1000) }} kB{% else %}{{ '%.1f'|format(z.groesse / 1000000) }} MB{% endif %}</td>
+    <td class="pfad">{% if teile|length == 2 %}<span class="ordner">{{ teile[0] }}/</span>{{ teile[1] }}{% else %}{{ z.path }}{% endif %}</td>
+    <td class="detail">{{ z.detail }}</td>
+</tr>
+{% endmacro %}

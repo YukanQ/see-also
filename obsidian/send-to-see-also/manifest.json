@@ -1,0 +1,9 @@
+{
+  "id": "send-to-see-also",
+  "name": "Send to see_also",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "Sends the selection or the whole note to see_also, a local semantic search for your PDFs, and shows the matching passages in the browser.",
+  "author": "YukanQ",
+  "isDesktopOnly": true
+}

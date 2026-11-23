@@ -1,0 +1,79 @@
+/* see_also - shared look (G1, 2026-11-19)
+   A quiet dark reading room: slate surfaces, one brass accent for what is
+   selected or primary, colour for state only. System fonts (works offline). */
+:root {
+    --ink: #1c1f23;          /* page */
+    --panel: #23272c;        /* raised surfaces */
+    --well: #181b1e;         /* inputs, lists, logs */
+    --rule: #353b42;         /* borders */
+    --text: #d8dce1;
+    --muted: #b4bcc5;        /* G1b: heller fuer bessere Lesbarkeit */
+    --faint: #939ca7;
+    --brass: #c8a46a;        /* accent: brand, selection, primary action */
+    --brass-ink: #1c1f23;    /* text on brass */
+    --select: #2e3a46;       /* selected row */
+    --ok: #7fb08c;
+    --warn: #d99a5b;
+    --prompt: var(--warn);   /* Aufforderungen ("Not applied yet", "No document selected") */
+    --error: #d9706a;
+    --link: #9fb7cc;
+    --sans: "Avenir Next", "Avenir", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --mono: "SF Mono", Menlo, Consolas, monospace;
+    --r: 3px;
+}
+* { box-sizing: border-box; }
+html, body { background: var(--ink); color: var(--text); font-family: var(--sans); font-size: 15px; line-height: 1.45; }
+a { color: var(--link); text-underline-offset: 2px; }
+a:hover { color: var(--text); }
+:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* Top bar */
+.topbar { display: flex; align-items: baseline; gap: 1.4em; padding: 6px 12px 7px; border-bottom: 1px solid var(--rule); background: var(--ink); }
+.topbar .brand { font-family: var(--serif); font-style: italic; font-size: 1.7em; color: var(--brass); text-decoration: none; letter-spacing: 0.01em; margin-right: 0.3em; }
+.header-link { color: #ffffff; background: none; border: none; font: inherit; padding: 0; cursor: pointer; text-decoration: none; }
+.header-link:hover { color: var(--brass); }
+.header-index-badge { color: var(--faint); font-variant-numeric: tabular-nums; }
+.header-index-badge.attention { color: var(--warn); }
+
+/* Buttons */
+.btn { font: inherit; font-size: 0.85em; border-radius: var(--r); padding: 2px 9px; cursor: pointer;   /* G1b: eine Groesse fuer alle */
+       text-decoration: none; display: inline-block; line-height: 1.5;
+       background: transparent; color: var(--text); border: 1px solid var(--rule); }
+.btn:hover:not(:disabled) { border-color: var(--muted); }
+.btn.primary { background: var(--brass); color: var(--brass-ink); border-color: var(--brass); font-weight: 600; }
+.btn.primary:hover:not(:disabled) { filter: brightness(1.08); }
+.btn:disabled, .btn.blocked { opacity: 0.45; cursor: not-allowed; }
+.btn.small { }
+.btn.hidden, .hidden { display: none !important; }
+.link-btn { background: none; border: none; font: inherit; color: var(--link); cursor: pointer; padding: 0; }
+.link-btn:hover { color: var(--text); }
+
+/* Text roles */
+.hint { color: var(--muted); font-size: 0.9em; max-width: 46em; }
+.muted { color: var(--muted); }
+.prompt, .placeholder.prompt { color: var(--prompt); }
+.unavailable { color: var(--faint); }
+.path { font-family: var(--sans); word-break: break-word; }
+.path .dir { color: var(--muted); }
+.num { font-variant-numeric: tabular-nums; }
+
+/* Messages */
+.msg { border-left: 3px solid var(--rule); background: var(--panel); padding: 0.6em 0.9em; margin: 0 0 0.8em; max-width: 50em; }
+.msg.error { border-left-color: var(--error); }
+.msg.notice { border-left-color: var(--warn); }
+.msg.cancelled { border-left-color: var(--muted); }
+
+/* Live log */
+.log { background: var(--well); color: var(--muted); border: 1px solid var(--rule); border-radius: var(--r);
+       padding: 0.5em 0.8em; max-height: 22em; overflow-y: auto; font-family: var(--mono); font-size: 0.8em; white-space: pre-wrap; }
+
+details > summary { cursor: pointer; color: var(--text); }
+/* Aufklapper als Knopf (z. B. "List all … files") */
+details.as-btn > summary { list-style: none; display: inline-block; font-size: 0.85em; line-height: 1.5;
+    border: 1px solid var(--rule); border-radius: var(--r); padding: 2px 9px; }
+details.as-btn > summary::-webkit-details-marker { display: none; }
+details.as-btn > summary:hover { border-color: var(--muted); }
+details.as-btn[open] > summary { border-color: var(--brass); }
+input[type="number"], input[type="text"], textarea { background: var(--well); color: var(--text); border: 1px solid var(--rule); border-radius: var(--r); font: inherit; }

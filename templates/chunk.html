@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>see also: passage {{ chunk_id }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='see_also.css') }}">
+    <style>
+        body { margin: 0; }
+        main { padding: 1.2em 1.6em 3em; max-width: 60em; }
+        h2 { font-size: 1em; font-weight: 600; margin: 0 0 0.5em; }
+        .chunk-table { border-collapse: collapse; }
+        .chunk-table td { padding: 4px 18px 4px 0; vertical-align: top; }
+        .chunk-table td.label { color: var(--muted); white-space: nowrap; }
+        .chunk-text { font-family: var(--serif); max-width: 40em; }
+    </style>
+</head>
+<body>
+    {% include "_header.html" %}
+    <main>
+    {% include "_chunk_block.html" %}
+    <p><a href="{{ url_for('index') }}">Back to search</a></p>
+    </main>
+</body>
+</html>

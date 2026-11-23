@@ -1,0 +1,125 @@
+{# G1 (19.11.2026): englisch, ruhigeres Layout. IDs unveraendert (status.html greift darauf zu). #}
+{% for notice in status.startup_notices %}
+<div class="msg notice">{{ notice }}</div>
+{% endfor %}
+{% if status.index_error %}
+<div class="msg error">
+    <strong>The last indexing run stopped with an error.</strong><br>
+    {{ status.index_error }}<br>
+    <span class="hint">The index is unchanged. Details: logs/{{ status.index_log_file }}</span>
+</div>
+{% endif %}
+{% if status.index_cancelled %}
+<div class="msg cancelled">
+    <strong>The last indexing run was cancelled.</strong>
+    <span class="hint">The index is unchanged.</span>
+</div>
+{% endif %}
+
+<section class="block">
+<h2>Index</h2>
+<table>
+    <tr><td class="label">Collection</td><td class="value">{{ pdf_base_dir_anzeige }}</td></tr>
+    <tr><td class="label">PDFs</td><td class="value">{{ "{:,}".format(status.anzahl_pdfs) }}</td></tr>
+    <tr>
+        <td class="label">Indexed passages</td>
+        <td class="value">
+            {% if status.anzahl_chunks is none %}
+                <span class="prompt">No index yet. Create it with “Rebuild index”.</span>
+            {% else %}
+                {{ "{:,}".format(status.anzahl_chunks) }}
+            {% endif %}
+        </td>
+    </tr>
+    <tr><td class="label">OCR versions</td><td class="value">{{ "{:,}".format(status.ocr.erfasst) }} <span class="unavailable">in {{ status.ocr_ordner|anzeige }}</span></td></tr>
+    {% if status.ausgeschlossen %}
+    <tr><td class="label">Excluded areas</td><td class="value">{{ status.ausgeschlossen | join(", ") }}</td></tr>
+    {% endif %}
+    <tr>
+        <td class="label">Last update</td>
+        <td class="value">
+            {% if status.last_incremental_index_at %}{{ status.last_incremental_index_at }}{% else %}<span class="unavailable">Never</span>{% endif %}
+        </td>
+    </tr>
+    <tr>
+        <td class="label">Last full rebuild</td>
+        <td class="value">
+            {% if status.last_full_index_at %}{{ status.last_full_index_at }}{% else %}<span class="unavailable">Never</span>{% endif %}
+        </td>
+    </tr>
+    <tr>
+        <td class="label">Waiting for the next update</td>
+        <td class="value">
+            {{ status.neu_seit_letzter_indizierung }} new or changed, {{ status.entfernt_seit_letzter_indizierung }} removed{% if status.ocr_einzubetten %}, {{ status.ocr_einzubetten }} OCR versions{% endif %}
+        </td>
+    </tr>
+    <tr><td class="label">Server started</td><td class="value">{{ status.prozess_gestartet }}</td></tr>
+    {% if status.alte_json_dateien %}
+    <tr><td class="label">Old index files</td><td class="value"><span class="unavailable">{{ status.alte_json_dateien|join(", ") }} are no longer used; archive them with tools/json_archivieren.py</span></td></tr>
+    {% endif %}
+</table>
+
+<div class="box-controls">
+    <button id="btn-incremental" class="btn primary state-btn ready" onclick="startIndexing('incremental')" title="Read new and changed files, remove deleted ones">Update index</button>
+    <button id="btn-full" class="btn state-btn ready" onclick="startIndexing('full')" title="Read every file again. Rarely needed; takes many hours for a large collection.">Rebuild index</button>
+    <span class="muted" style="margin-left:1.2em">Show passage</span>
+    <input type="number" id="chunk_id" min="0" placeholder="number" aria-label="Passage number"
+           onkeydown="if (event.key === 'Enter') triggerChunkLookup()">
+    <button id="btn-anzeigen" class="btn small state-btn ready" onclick="triggerChunkLookup()">Show</button>
+</div>
+
+<div id="progress" class="progress hidden"></div>
+<button id="btn-cancel" class="btn small cancel-btn hidden" onclick="cancelIndexing()">Cancel</button>
+</section>
+
+{% if status.problem_files %}
+<section class="block problem-files">
+    <h2>Files that could not be read: {{ status.problem_files|length }}</h2>
+    <p class="hint">Reading these PDFs crashed, timed out or failed. They were skipped and are tried again
+    only when the file changes. OCR usually does not help here.</p>
+    <table class="problem-files-table">
+        {% for f in status.problem_files %}
+        <tr>
+            <td class="befund befund-{{ f.befund }}">{{ {"absturz": "Crash", "zeitlimit": "Time limit", "fehler": "Read error"}.get(f.befund, f.befund) }}</td>
+            <td class="missing-path">{{ f.path }}</td>
+            <td class="meldung">{{ f.meldung }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</section>
+{% endif %}
+
+{% if status.missing_files %}
+{% set z = status.ocr.zahlen_fehlend %}
+<section class="block missing-files">
+    <h2>PDFs without text: {{ "{:,}".format(status.missing_files|length) }}</h2>
+    <p class="hint">These PDFs have no passage in the index, usually because they are scans without a
+    text layer. {{ "{:,}".format(z.offen) }} still need OCR, {{ "{:,}".format(z.erfasst) }} have an OCR version
+    that the next update makes searchable, {{ "{:,}".format(z.nicht_erfasst) }} gave no result.</p>
+    <p class="links">
+        <a class="btn" href="{{ url_for('problemfaelle_seite') }}">Files to review</a>
+        <a class="btn" href="{{ url_for('ohne_text_seite') }}">OCR found no text</a>
+    </p>
+    <div class="box-controls">
+        <button id="btn-ocr-lauf" class="btn primary state-btn ready" onclick="startOcrLauf()">Run OCR</button>
+        <button id="btn-ocr-cancel" class="btn small cancel-btn hidden" onclick="cancelOcrLauf()">Stop OCR</button>
+    </div>
+    <p class="hint">OCR in English, German and French, smallest files first. Originals stay untouched; each OCR
+    version is stored under the same path in the OCR folder. You can stop at any time; the next run
+    continues. Log: logs/ocr_&lt;time&gt;.log</p>
+    <div id="ocr-progress" class="progress hidden"></div>
+    <pre id="ocr-log" class="log ocr-log hidden"></pre>
+    <details class="as-btn">
+        <summary>List all {{ "{:,}".format(status.missing_files|length) }} files</summary>
+        <table class="missing-files-table">
+            {% for path in status.missing_files %}
+            {% set oz = status.ocr.je_pfad.get(path) %}
+            <tr>
+                <td class="ocr-zustand">{% if oz %}{{ {"offen": "waiting for OCR", "erfasst": "OCR done", "in_arbeit": "in progress"}.get(oz[0], "no result") }}{% else %}not checked{% endif %}</td>
+                <td class="missing-path">{{ path }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </details>
+</section>
+{% endif %}

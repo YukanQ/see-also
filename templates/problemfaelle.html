@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>see also: files to review</title>
+{% include "_dateiliste_gemeinsam.html" %}
+</head>
+<body>
+    {% include "_header.html" %}
+    {% from "_dateizeile.html" import zeile %}
+    <main>
+    <div class="page-title-row">
+        <h1>Files to review <span class="muted num" style="font-size:0.7em">{{ d.gesamt }}</span></h1>
+        <button class="btn small" onclick="location.reload()">Reload</button>
+        <a href="{{ url_for('ohne_text_seite') }}">OCR found no text ({{ d.ohne_text|length }})</a>
+        <a href="{{ url_for('status_page') }}">Status</a>
+    </div>
+    <p class="intro">
+        For each file, decide whether to delete it, replace it or leave it. <strong>Finder</strong> shows the
+        file selected in the front Finder window; <strong>Open</strong> opens it in a new tab (damaged files
+        usually do not open). <strong>Copy command</strong> puts a ready Terminal command on the clipboard
+        that moves every file of the group to the Trash (<code>mv -n -v -- … {{ d.papierkorb }}</code>);
+        check it before pressing Return. see_also itself changes nothing. Files you move or replace
+        disappear when you reload.
+        {% if not d.dateiende_liste %}<br>Truncated files that still have passages appear after
+        <code>venv/bin/python3 tools/pdf_dateiende.py</code> has run once.{% endif %}
+    </p>
+
+    {% if not d.gruppen %}
+        <p class="leer">Nothing to review.</p>
+    {% else %}
+    <nav class="inhalt">
+        {% for g in d.gruppen %}<a href="#g-{{ g.key }}">{{ g.titel }} ({{ g.zeilen|length }})</a>{% endfor %}
+    </nav>
+    {% for g in d.gruppen %}
+    <section id="g-{{ g.key }}">
+        <h2>{{ g.titel }} <span class="n">{{ g.zeilen|length }}</span>
+            <button class="knopf kopieren" onclick="befehlKopieren(this, {{ d.base|tojson|forceescape }}, {{ d.papierkorb|tojson|forceescape }})" title="Copy a Terminal command that moves all files of this group to the Trash">Copy command</button></h2>
+        <p class="erkl">{{ g.erklaerung }}</p>
+        <table>
+            {% for z in g.zeilen %}{{ zeile(z) }}{% endfor %}
+        </table>
+    </section>
+    {% endfor %}
+    {% endif %}
+    </main>
+</body>
+</html>

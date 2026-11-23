@@ -1,0 +1,8 @@
+# Direct dependencies. The exact versions of the reference installation
+# (macOS, Python 3.14, November 2026) are in requirements-lock.txt:
+#     venv/bin/python3 -m pip install -r requirements-lock.txt
+pymupdf>=1.24
+flask>=3.0
+numpy>=1.26
+sentence-transformers>=3.0
+torch>=2.2
